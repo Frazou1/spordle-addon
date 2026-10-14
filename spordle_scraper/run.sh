@@ -1,3 +1,3 @@
 #!/bin/bash
-echo "Démarrage de l'Add-on Spordle Scraper v1.6.1..."
+echo "Démarrage de l'Add-on Spordle Scraper v1.6.2..."
 python3 -u /app/main.py

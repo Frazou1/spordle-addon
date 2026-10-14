@@ -370,7 +370,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.6.1 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.6.2 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -445,6 +445,12 @@ async def scrape_and_publish():
                     await page.wait_for_timeout(2000)
                     nb_matchs = await page.locator("article[itemtype*='SportsEvent']").count()
                     print(f"[SCHEDULE] {nb_matchs} match(s) affiché(s).")
+                    # Capturer avant le défilement : il fait disparaître les cartes de match.
+                    # Capture before scrolling: scrolling makes the game cards disappear.
+                    html_content = await page.content()
+                    scraped_html[key] = html_content
+                    download_logos(BeautifulSoup(html_content, "html.parser"))
+                    continue
 
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(1500)
@@ -478,6 +484,10 @@ async def scrape_and_publish():
     print("\n[MQTT] Début de la publication sur le broker...")
 
     total_joueurs = len(roster_data["joueurs"]) + len(roster_data["gardiens"])
+    # Page bloquée ou vide : garder l'alignement déjà publié (message MQTT retenu) au lieu de l'effacer.
+    # Blocked or empty page: keep the roster already published (retained MQTT message) instead of wiping it.
+    if total_joueurs == 0:
+        print("[ROSTER] Aucun joueur lu : alignement précédent conservé.")
     publish_to_mqtt(f"homeassistant/sensor/spordle_{TEAM_ID}_roster/config", {
         "name": f"Spordle Équipe {TEAM_ID} Alignement",
         "unique_id": f"spordle_team_{TEAM_ID}_roster",
@@ -485,8 +495,9 @@ async def scrape_and_publish():
         "json_attributes_topic": f"spordle/{TEAM_ID}/roster/attributes",
         "icon": "mdi:account-group"
     })
-    publish_to_mqtt(f"spordle/{TEAM_ID}/roster/state", f"{total_joueurs} joueurs | {len(roster_data['personnel'])} instructeurs")
-    publish_to_mqtt(f"spordle/{TEAM_ID}/roster/attributes", roster_data)
+    if total_joueurs:
+        publish_to_mqtt(f"spordle/{TEAM_ID}/roster/state", f"{total_joueurs} joueurs | {len(roster_data['personnel'])} instructeurs")
+        publish_to_mqtt(f"spordle/{TEAM_ID}/roster/attributes", roster_data)
 
     if next_match:
         prochain_match = f"{next_match['date']} {next_match['heure']} - {next_match['arene']}".strip()
