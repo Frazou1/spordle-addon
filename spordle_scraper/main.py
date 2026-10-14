@@ -25,15 +25,13 @@ LEAGUE_UUID = "c43095cf-c7e6-4562-994c-a71a9a0cbf3a"
 SCHEDULE_HORS_CONCOURS = "198969"
 SCHEDULE_SAISON_REGULIERE = "198221"
 
-LOGOS_DIR = "/share/spordle_logos"
+# Logos écrits directement dans /config/www : HA ne sert pas /local à travers un lien symbolique vers /share.
+# Logos written straight into /config/www: HA won't serve /local through a symlink to /share.
 WWW_LOGOS_DIR = "/config/www/spordle_logos"
+if os.path.islink(WWW_LOGOS_DIR):
+    os.unlink(WWW_LOGOS_DIR)
+LOGOS_DIR = WWW_LOGOS_DIR if os.path.isdir("/config") else "/share/spordle_logos"
 os.makedirs(LOGOS_DIR, exist_ok=True)
-
-if os.path.exists("/config/www") and not os.path.exists(WWW_LOGOS_DIR):
-    try:
-        os.symlink(LOGOS_DIR, WWW_LOGOS_DIR)
-    except Exception as e:
-        print(f"[LOGOS Note] {e}")
 
 def publish_to_mqtt(topic, payload):
     try:
@@ -163,7 +161,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.5.0 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.5.1 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
