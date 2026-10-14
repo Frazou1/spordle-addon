@@ -46,8 +46,15 @@ def publish_to_mqtt(topic, payload):
         client.username_pw_set(MQTT_USER, MQTT_PASS)
     try:
         client.connect(MQTT_HOST, int(MQTT_PORT), keepalive=10)
-        client.publish(topic, json.dumps(payload, ensure_ascii=False), retain=True)
+        client.loop_start()
+        # Attendre l'accusé de réception : une connexion refusée (ex. sans identifiants) n'est plus masquée.
+        # Wait for the broker ack: a refused connection (e.g. no credentials) is no longer hidden.
+        result = client.publish(topic, json.dumps(payload, ensure_ascii=False), retain=True)
+        result.wait_for_publish(timeout=5)
+        client.loop_stop()
         client.disconnect()
+        if not result.is_published():
+            raise RuntimeError("message non confirmé par le broker (identifiants MQTT ?)")
         print(f"[MQTT SUCCESS] Publié sur: {topic}")
     except Exception as e:
         print(f"[MQTT ERROR] Échec sur {topic}: {e}")
@@ -363,7 +370,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.6.0 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.6.1 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -382,7 +389,8 @@ async def scrape_and_publish():
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
         context = await browser.new_context(
             viewport={"width": 1280, "height": 900},
-            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36"
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/122.0.0.0 Safari/537.36",
+            locale="fr-CA",
         )
         page = await context.new_page()
 
@@ -415,12 +423,17 @@ async def scrape_and_publish():
                 # Horaire : passer du filtre « 7 prochains jours » à la saison complète
                 # Schedule: switch the "next 7 days" filter to the whole season
                 if key == "schedule":
+                    for _ in range(20):
+                        if await page.locator(".spdl-skeleton").count() == 0:
+                            break
+                        await page.wait_for_timeout(1000)
                     for etape, sel in (("filtre", "button:has-text('prochains jours'), button:has-text('prochain jour'), button:has-text('jours')"),
                                        ("saison", "li:has-text('Saison')"),
                                        ("appliquer", "button:has-text('Appliquer')")):
                         try:
                             el = page.locator(sel).first
-                            await el.wait_for(state="visible", timeout=10000)
+                            await el.wait_for(state="visible", timeout=15000)
+                            print(f"[SCHEDULE] Clic '{etape}': {(await el.inner_text()).strip()[:40]}")
                             await el.click(timeout=5000)
                             await page.wait_for_timeout(1500)
                         except Exception as e:
@@ -429,6 +442,9 @@ async def scrape_and_publish():
                         if await page.locator(".spdl-skeleton").count() == 0 and await page.locator("article[itemtype*='SportsEvent']").count() > 0:
                             break
                         await page.wait_for_timeout(1000)
+                    await page.wait_for_timeout(2000)
+                    nb_matchs = await page.locator("article[itemtype*='SportsEvent']").count()
+                    print(f"[SCHEDULE] {nb_matchs} match(s) affiché(s).")
 
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 await page.wait_for_timeout(1500)
