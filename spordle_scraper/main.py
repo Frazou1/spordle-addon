@@ -531,7 +531,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.0 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.1 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -571,7 +571,15 @@ async def scrape_and_publish():
         for key, url in urls_to_scrape.items():
             try:
                 print(f"[SCRAPE] Chargement de '{key}'...")
-                await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                for essai in (1, 2):
+                    try:
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        break
+                    except Exception as e:
+                        if essai == 2:
+                            raise
+                        print(f"[SCRAPE RETRY] '{key}' : {e} — nouvel essai dans 5 s")
+                        await page.wait_for_timeout(5000)
                 
                 # Attente dynamique spécifique pour l'onglet Roster
                 if key == "roster":
@@ -658,6 +666,13 @@ async def scrape_and_publish():
     player_info_hc = next((p for p in player_stats_hc if TRACKED_PLAYER in p.get("Nom", "").lower()), None) if TRACKED_PLAYER else None
     player_info_sr = next((p for p in player_stats_sr if TRACKED_PLAYER in p.get("Nom", "").lower()), None) if TRACKED_PLAYER else None
 
+    # Une page en échec (réseau, blocage) ne doit pas effacer les données déjà publiées (messages retenus).
+    # A failed page (network, blocking) must not wipe data already published (retained messages).
+    ok = {k: bool(scraped_html.get(k)) for k in urls_to_scrape}
+    echecs = [k for k, v in ok.items() if not v]
+    if echecs:
+        print(f"[PUBLICATION] Pages en échec, capteurs conservés : {', '.join(echecs)}")
+
     print("\n[MQTT] Début de la publication sur le broker...")
 
     total_joueurs = len(roster_data["joueurs"]) + len(roster_data["gardiens"])
@@ -688,8 +703,9 @@ async def scrape_and_publish():
         "json_attributes_topic": f"spordle/{TEAM_ID}/schedule/attributes",
         "icon": "mdi:calendar-clock"
     })
-    publish_to_mqtt(f"spordle/{TEAM_ID}/schedule/state", prochain_match)
-    publish_to_mqtt(f"spordle/{TEAM_ID}/schedule/attributes", schedule_data)
+    if ok["schedule"]:
+        publish_to_mqtt(f"spordle/{TEAM_ID}/schedule/state", prochain_match)
+        publish_to_mqtt(f"spordle/{TEAM_ID}/schedule/attributes", schedule_data)
 
     if last_match:
         last_state = f"{last_match['date']} : {' '.join(last_match['equipes'])} {last_match['score']}"
@@ -702,8 +718,9 @@ async def scrape_and_publish():
         "json_attributes_topic": f"spordle/{TEAM_ID}/last_match/attributes",
         "icon": "mdi:scoreboard"
     })
-    publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/state", last_state)
-    publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/attributes", {"match": last_match, "tous_les_matchs_joues": joues})
+    if ok["schedule"]:
+        publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/state", last_state)
+        publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/attributes", {"match": last_match, "tous_les_matchs_joues": joues})
 
     publish_to_mqtt(f"homeassistant/sensor/spordle_{TEAM_ID}_standings/config", {
         "name": f"Spordle Classement {MY_TEAM_NAME.capitalize()}",
@@ -712,17 +729,18 @@ async def scrape_and_publish():
         "json_attributes_topic": f"spordle/{TEAM_ID}/standings/attributes",
         "icon": "mdi:trophy"
     })
-    publish_to_mqtt(f"spordle/{TEAM_ID}/standings/state", f"{my_team_info.get('#', 'N/A')}e rang" if my_team_info else "Saison en cours")
-    publish_to_mqtt(f"spordle/{TEAM_ID}/standings/attributes", {
-        "mon_equipe": my_team_info,
-        "classement_complet": standings_list,
-        "classement_division": division,
-        "rang_ligue": rang_ligue,
-        "nb_equipes_ligue": nb_ligue,
-        "classement_ligue": ligue,
-    })
+    if ok["standings"]:
+        publish_to_mqtt(f"spordle/{TEAM_ID}/standings/state", f"{my_team_info.get('#', 'N/A')}e rang" if my_team_info else "Saison en cours")
+        publish_to_mqtt(f"spordle/{TEAM_ID}/standings/attributes", {
+            "mon_equipe": my_team_info,
+            "classement_complet": standings_list,
+            "classement_division": division,
+            "rang_ligue": rang_ligue,
+            "nb_equipes_ligue": nb_ligue,
+            "classement_ligue": ligue,
+        })
 
-    if TRACKED_PLAYER:
+    if TRACKED_PLAYER and (ok["stats_hors_concours"] or ok["stats_saison_reguliere"]):
         player_slug = re.sub(r'[^a-zA-Z0-9]', '_', TRACKED_PLAYER)
         pts_hc = player_info_hc.get("PTS", "0") if player_info_hc else "0"
         pts_sr = player_info_sr.get("PTS", "0") if player_info_sr else "0"
@@ -745,10 +763,11 @@ async def scrape_and_publish():
             "json_attributes_topic": f"spordle/{TEAM_ID}/{key}/attributes",
             "icon": "mdi:hockey-sticks"
         })
-        publish_to_mqtt(f"spordle/{TEAM_ID}/{key}/state", f"{len(data_list)} joueurs")
-        publish_to_mqtt(f"spordle/{TEAM_ID}/{key}/attributes", {"joueurs": data_list})
+        if ok[key]:
+            publish_to_mqtt(f"spordle/{TEAM_ID}/{key}/state", f"{len(data_list)} joueurs")
+            publish_to_mqtt(f"spordle/{TEAM_ID}/{key}/attributes", {"joueurs": data_list})
 
-    print("\n[FIN] Cycle terminé avec succès.")
+    print("\n[FIN] Cycle terminé" + (f" ({len(echecs)} page(s) en échec)." if echecs else " avec succès."))
 
 if __name__ == "__main__":
     while True:
