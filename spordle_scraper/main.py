@@ -464,6 +464,17 @@ def parse_standings_ligue(html: str):
     print(f"[PARSING STANDINGS] Division: {len(division)} équipes, ligue: {len(ligue)} équipes.")
     # Version allégée de la ligue complète (sans logo distant) pour limiter la taille de l'attribut.
     # Lighter copy of the whole league (no remote logo) to keep the attribute small.
+    def _total(r, cle):
+        # LHQCA : V/D détaillées en VR/VP/VF et DR/DP/DF (V et D valent « - »)
+        # LHQCA: wins/losses split into VR/VP/VF and DR/DP/DF (V and D are "-")
+        if str(r.get(cle, "")).strip().isdigit():
+            return r[cle]
+        parts = [r.get(cle + suffixe) for suffixe in ("R", "P", "F")]
+        nombres = [int(x) for x in parts if str(x or "").strip().isdigit()]
+        return str(sum(nombres)) if nombres else r.get(cle)
+
+    for r in division + ligue:
+        r["V"], r["D"] = _total(r, "V"), _total(r, "D")
     ligue_courte = [{k: r.get(k) for k in ("#", "Équipe", "MJ", "V", "D", "N", "PTS", "logo_local")} for r in ligue]
     return division, rang_ligue, len(ligue), ligue_courte
 
@@ -529,7 +540,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.3 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.4 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -679,6 +690,12 @@ async def scrape_and_publish():
     standings_list = parse_standings(scraped_html.get("standings", ""))
     division, rang_ligue, nb_ligue, ligue = parse_standings_ligue(scraped_html.get("standings_ligue", ""))
 
+    for r in standings_list:
+        for cle in ("V", "D"):
+            if not str(r.get(cle, "")).strip().isdigit():
+                nombres = [int(r[cle + x]) for x in ("R", "P", "F") if str(r.get(cle + x, "")).strip().isdigit()]
+                if nombres:
+                    r[cle] = str(sum(nombres))
     my_team_info = next((t for t in standings_list if MY_TEAM_NAME in t.get("Équipe", "").upper()), None)
     player_info_hc = next((p for p in player_stats_hc if TRACKED_PLAYER in p.get("Nom", "").lower()), None) if TRACKED_PLAYER else None
     player_info_sr = next((p for p in player_stats_sr if TRACKED_PLAYER in p.get("Nom", "").lower()), None) if TRACKED_PLAYER else None
