@@ -146,8 +146,6 @@ def download_logo(url: str, team_name: str) -> str:
             with open(filepath, "wb") as f:
                 f.write(data)
             print(f"[LOGO] Téléchargé: {team_name} → {filename} ({len(data)} octets)")
-        else:
-            print(f"[LOGO] Déjà présent: {filename}")
 
         return f"/local/spordle_logos/{filename}"
     except Exception as e:
@@ -531,7 +529,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.1 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.2 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -546,6 +544,7 @@ async def scrape_and_publish():
     }
 
     scraped_html = {}
+    saison_ok = False
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True, args=["--no-sandbox", "--disable-blink-features=AutomationControlled"])
@@ -597,17 +596,27 @@ async def scrape_and_publish():
                         if await page.locator(".spdl-skeleton").count() == 0:
                             break
                         await page.wait_for_timeout(1000)
-                    for etape, sel in (("filtre", "button:has-text('prochains jours'), button:has-text('prochain jour'), button:has-text('jours')"),
-                                       ("saison", "li:has-text('Saison')"),
-                                       ("appliquer", "button:has-text('Appliquer')")):
+                    for essai in (1, 2):
+                        for etape, sel in (("filtre", "button:has-text('prochains jours'), button:has-text('prochain jour'), button:has-text('jours')"),
+                                           ("saison", "li:has-text('Saison')"),
+                                           ("appliquer", "button:has-text('Appliquer')")):
+                            try:
+                                el = page.locator(sel).first
+                                await el.wait_for(state="visible", timeout=15000)
+                                print(f"[SCHEDULE] Clic '{etape}': {(await el.inner_text()).strip()[:40]}")
+                                await el.click(timeout=5000)
+                                await page.wait_for_timeout(1500)
+                            except Exception as e:
+                                print(f"[SCHEDULE] Clic '{etape}' impossible: {e}")
+                        await page.wait_for_timeout(2000)
                         try:
-                            el = page.locator(sel).first
-                            await el.wait_for(state="visible", timeout=15000)
-                            print(f"[SCHEDULE] Clic '{etape}': {(await el.inner_text()).strip()[:40]}")
-                            await el.click(timeout=5000)
-                            await page.wait_for_timeout(1500)
-                        except Exception as e:
-                            print(f"[SCHEDULE] Clic '{etape}' impossible: {e}")
+                            libelle = (await page.locator("button:has-text('Saison'), button:has-text('jours')").first.inner_text()).strip()
+                        except Exception:
+                            libelle = ""
+                        saison_ok = "saison" in libelle.lower()
+                        print(f"[SCHEDULE] Filtre après essai {essai} : '{libelle[:40]}' -> {'saison complète' if saison_ok else 'NON appliqué'}")
+                        if saison_ok:
+                            break
                     for _ in range(30):
                         if await page.locator(".spdl-skeleton").count() == 0 and await page.locator("article[itemtype*='SportsEvent']").count() > 0:
                             break
@@ -672,6 +681,8 @@ async def scrape_and_publish():
     echecs = [k for k, v in ok.items() if not v]
     if echecs:
         print(f"[PUBLICATION] Pages en échec, capteurs conservés : {', '.join(echecs)}")
+    if ok["schedule"] and not joues and not saison_ok:
+        print("[PUBLICATION] Filtre « Saison » non appliqué : dernier match conservé.")
 
     print("\n[MQTT] Début de la publication sur le broker...")
 
@@ -718,7 +729,7 @@ async def scrape_and_publish():
         "json_attributes_topic": f"spordle/{TEAM_ID}/last_match/attributes",
         "icon": "mdi:scoreboard"
     })
-    if ok["schedule"]:
+    if ok["schedule"] and (joues or saison_ok):
         publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/state", last_state)
         publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/attributes", {"match": last_match, "tous_les_matchs_joues": joues})
 
