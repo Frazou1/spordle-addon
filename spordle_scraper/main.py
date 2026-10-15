@@ -529,7 +529,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.2 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.3 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -596,6 +596,9 @@ async def scrape_and_publish():
                         if await page.locator(".spdl-skeleton").count() == 0:
                             break
                         await page.wait_for_timeout(1000)
+                    # Vue « 7 prochains jours » : contient les matchs à venir que la vue « Saison » peut omettre.
+                    # "Next 7 days" view: holds upcoming games the "Season" view may leave out.
+                    scraped_html["schedule_7j"] = await page.content()
                     for essai in (1, 2):
                         for etape, sel in (("filtre", "button:has-text('prochains jours'), button:has-text('prochain jour'), button:has-text('jours')"),
                                            ("saison", "li:has-text('Saison')"),
@@ -660,7 +663,12 @@ async def scrape_and_publish():
         if not roster_data["personnel"]:
             roster_data["personnel"] = roster_texte["personnel"]
     schedule_data = parse_schedule_structured(scraped_html.get("schedule", ""))
-    matchs = parse_schedule_cards(scraped_html.get("schedule", ""))
+    matchs = []
+    for vue in ("schedule", "schedule_7j"):
+        for m in parse_schedule_cards(scraped_html.get(vue, "")):
+            cle = (m.get("numero") or "", m.get("date_iso"), tuple(m.get("equipes", [])))
+            if not any((x.get("numero") or "", x.get("date_iso"), tuple(x.get("equipes", []))) == cle for x in matchs):
+                matchs.append(m)
     joues = sorted([m for m in matchs if m["joue"]], key=lambda m: m.get("date_iso", ""))
     a_venir = sorted([m for m in matchs if not m["joue"]], key=lambda m: m.get("date_iso", ""))
     last_match = joues[-1] if joues else None
