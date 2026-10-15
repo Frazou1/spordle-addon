@@ -309,6 +309,167 @@ def parse_schedule_cards(html: str):
     return matchs
 
 
+# Lecteur d'alignement de l'add-on RSEQ Hockey : lit le tableau (noms propres, numéros, stats).
+# RSEQ Hockey roster reader: reads the table (clean names, numbers, stats).
+def _extract_name_from_cell(td):
+    """
+    Extrait le nom depuis le <div title="NOM"> de Spordle.
+    Le title contient 'PRÉNOM NOM' propre.
+    """
+    # Priorité 1 : attribut title d'un div
+    for div in td.find_all("div"):
+        title = div.get("title", "").strip()
+        if title and len(title) > 2 and not title.isdigit():
+            return title
+
+    # Priorité 2 : balise <a> avec texte direct
+    a = td.find("a")
+    if a:
+        txt = a.get_text(strip=True)
+        if txt and len(txt) > 2 and not txt.isdigit():
+            return txt
+
+    # Priorité 3 : span avec class text-truncate (personnel)
+    sp = td.find("span", class_=re.compile("text-truncate", re.I))
+    if sp:
+        txt = sp.get_text(strip=True)
+        if txt and len(txt) > 2:
+            return txt
+
+    return ""
+
+
+def _extract_number_from_cell(td_name, td_num):
+    """
+    Extrait le numéro. Il est dans :
+    <span class='ml-2 text-muted'><span>11</span></span>
+    """
+    # Priorité 1 : span avec class ml-2 text-muted
+    for sp in td_name.find_all("span"):
+        classes = " ".join(sp.get("class", []))
+        if "text-muted" in classes and "ml-2" in classes:
+            num_span = sp.find("span")
+            if num_span:
+                txt = num_span.get_text(strip=True)
+                if txt.isdigit():
+                    return txt
+
+    # Priorité 2 : chercher le dernier <span> du td qui ne contient qu'un nombre 1-2 chiffres
+    all_spans = td_name.find_all("span")
+    for sp in reversed(all_spans):
+        txt = sp.get_text(strip=True)
+        if txt.isdigit() and 1 <= int(txt) <= 99:
+            return txt
+
+    return ""
+
+
+def parse_roster_table(html: str):
+    try:
+        with open("/share/spordle_roster_debug.html", "w", encoding="utf-8") as f:
+            f.write(html)
+    except Exception:
+        pass
+
+    soup = BeautifulSoup(html, "html.parser")
+    gardiens, joueurs, personnel = [], [], []
+
+    for table in soup.find_all("table"):
+        headers = [th.get_text(strip=True) for th in table.select("thead th")]
+        if not headers:
+            continue
+        hs = set(h.lower() for h in headers)
+
+        if "gardiens" in hs:
+            print(f"\n[ROSTER] Table GARDIENS")
+            for tr in table.select("tbody tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 2:
+                    continue
+                nom = _extract_name_from_cell(tds[0])
+                num = _extract_number_from_cell(tds[0], tds[1])
+                if nom:
+                    gardiens.append({
+                        "nom": nom,
+                        "numero": num,
+                        "stats": dict(zip(headers, [td.get_text(strip=True) for td in tds]))
+                    })
+                    print(f"   → {nom} (#{num or '?'})")
+
+        elif "joueurs" in hs:
+            print(f"\n[ROSTER] Table JOUEURS")
+            for tr in table.select("tbody tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 2:
+                    continue
+                nom = _extract_name_from_cell(tds[0])
+                num = _extract_number_from_cell(tds[0], tds[1])
+                if nom:
+                    joueurs.append({
+                        "nom": nom,
+                        "numero": num,
+                        "stats": dict(zip(headers, [td.get_text(strip=True) for td in tds]))
+                    })
+                    print(f"   → {nom} (#{num or '?'})")
+
+        elif any("personnel" in h.lower() for h in headers):
+            print(f"\n[ROSTER] Table PERSONNEL")
+            for tr in table.select("tbody tr"):
+                tds = tr.find_all("td")
+                if len(tds) < 2:
+                    continue
+                nom = ""
+                sp = tds[0].find("span", class_=re.compile("text-truncate", re.I))
+                if sp:
+                    nom = sp.get_text(strip=True)
+                else:
+                    div = tds[0].find("div", attrs={"title": True})
+                    if div:
+                        nom = div.get("title", "").strip()
+                role = tds[1].get_text(strip=True)
+                if nom:
+                    personnel.append({"nom": nom, "role": role})
+                    print(f"   → {nom} ({role})")
+
+    print(f"\n[PARSING ROSTER] {len(gardiens)} G, {len(joueurs)} J, {len(personnel)} P.")
+    return {"gardiens": gardiens, "joueurs": joueurs, "personnel": personnel}
+
+
+def parse_standings_ligue(html: str):
+    """Classement de la division de l'équipe + rang dans la ligue.
+    Team's division standings + rank in the whole league."""
+    soup = BeautifulSoup(html, "html.parser")
+    tables = []
+    for table in soup.find_all("table"):
+        headers = [th.get_text(strip=True) for th in table.select("thead th")]
+        if "Équipe" not in headers:
+            continue
+        rows = []
+        for tr in table.select("tbody tr"):
+            tds = [td.get_text(strip=True) for td in tr.find_all("td")]
+            if len(tds) < len(headers):
+                continue
+            row = dict(zip(headers, tds))
+            img = tr.find("img")
+            remote = img.get("src", "") if img else ""
+            row["logo_remote"] = remote
+            row["logo_local"] = download_logo(remote, row.get("Équipe", "")) if remote else ""
+            rows.append(row)
+        if any(MY_TEAM_NAME in r.get("Équipe", "").upper() for r in rows):
+            tables.append(rows)
+    if not tables:
+        print("[PARSING STANDINGS] Équipe introuvable dans le classement.")
+        return [], None, None, []
+    tables.sort(key=len)
+    division, ligue = tables[0], tables[-1]
+    rang_ligue = next((r.get("#") for r in ligue if MY_TEAM_NAME in r.get("Équipe", "").upper()), None)
+    print(f"[PARSING STANDINGS] Division: {len(division)} équipes, ligue: {len(ligue)} équipes.")
+    # Version allégée de la ligue complète (sans logo distant) pour limiter la taille de l'attribut.
+    # Lighter copy of the whole league (no remote logo) to keep the attribute small.
+    ligue_courte = [{k: r.get(k) for k in ("#", "Équipe", "MJ", "V", "D", "N", "PTS", "logo_local")} for r in ligue]
+    return division, rang_ligue, len(ligue), ligue_courte
+
+
 def parse_schedule_structured(html: str):
     soup = BeautifulSoup(html, "html.parser")
     text = soup.get_text(" ")
@@ -370,15 +531,16 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.6.2 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.0 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
     
     urls_to_scrape = {
-        "roster": f"https://page.spordle.com/fr/lhqca/teams/{TEAM_ID}",
+        "roster": f"https://page.spordle.com/fr/lhqca/teams/{TEAM_ID}?tab=roster",
         "schedule": f"https://page.spordle.com/fr/lhqca/teams/{TEAM_ID}?tab=schedule",
         "standings": f"https://page.spordle.com/fr/lhqca/teams/{TEAM_ID}?tab=standings",
+        "standings_ligue": f"{base_url}?scheduleId={SCHEDULE_SAISON_REGULIERE}&tab=standings",
         "stats_hors_concours": f"{base_url}?scheduleId={SCHEDULE_HORS_CONCOURS}&tab=playerstats",
         "stats_saison_reguliere": f"{base_url}?scheduleId={SCHEDULE_SAISON_REGULIERE}&tab=playerstats"
     }
@@ -465,7 +627,21 @@ async def scrape_and_publish():
         await browser.close()
 
     print("\n[PARSING] Traitement des données extraites...")
-    roster_data = parse_roster_structured(scraped_html.get("roster", ""))
+    roster_texte = parse_roster_structured(scraped_html.get("roster", ""))
+    roster_data = parse_roster_table(scraped_html.get("roster", ""))
+    if not (roster_data["joueurs"] or roster_data["gardiens"]):
+        print("[ROSTER] Tableau illisible : lecteur texte utilisé en repli.")
+        roster_data = roster_texte
+    else:
+        # Ajouter la position lue par l'ancien lecteur, par numéro / add position from the text reader, by number
+        pos = {p["numero"]: p.get("position") for p in roster_texte["joueurs"] + roster_texte["gardiens"]}
+        for p in roster_data["gardiens"]:
+            p["position"] = "G"
+        for p in roster_data["joueurs"]:
+            if pos.get(p.get("numero")):
+                p["position"] = pos[p["numero"]]
+        if not roster_data["personnel"]:
+            roster_data["personnel"] = roster_texte["personnel"]
     schedule_data = parse_schedule_structured(scraped_html.get("schedule", ""))
     matchs = parse_schedule_cards(scraped_html.get("schedule", ""))
     joues = sorted([m for m in matchs if m["joue"]], key=lambda m: m.get("date_iso", ""))
@@ -476,6 +652,7 @@ async def scrape_and_publish():
     player_stats_hc = parse_table_generic(scraped_html.get("stats_hors_concours", ""))
     player_stats_sr = parse_table_generic(scraped_html.get("stats_saison_reguliere", ""))
     standings_list = parse_standings(scraped_html.get("standings", ""))
+    division, rang_ligue, nb_ligue, ligue = parse_standings_ligue(scraped_html.get("standings_ligue", ""))
 
     my_team_info = next((t for t in standings_list if MY_TEAM_NAME in t.get("Équipe", "").upper()), None)
     player_info_hc = next((p for p in player_stats_hc if TRACKED_PLAYER in p.get("Nom", "").lower()), None) if TRACKED_PLAYER else None
@@ -536,7 +713,14 @@ async def scrape_and_publish():
         "icon": "mdi:trophy"
     })
     publish_to_mqtt(f"spordle/{TEAM_ID}/standings/state", f"{my_team_info.get('#', 'N/A')}e rang" if my_team_info else "Saison en cours")
-    publish_to_mqtt(f"spordle/{TEAM_ID}/standings/attributes", {"mon_equipe": my_team_info, "classement_complet": standings_list})
+    publish_to_mqtt(f"spordle/{TEAM_ID}/standings/attributes", {
+        "mon_equipe": my_team_info,
+        "classement_complet": standings_list,
+        "classement_division": division,
+        "rang_ligue": rang_ligue,
+        "nb_equipes_ligue": nb_ligue,
+        "classement_ligue": ligue,
+    })
 
     if TRACKED_PLAYER:
         player_slug = re.sub(r'[^a-zA-Z0-9]', '_', TRACKED_PLAYER)
