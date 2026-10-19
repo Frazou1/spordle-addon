@@ -540,7 +540,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.7 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.8 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -636,36 +636,27 @@ async def scrape_and_publish():
                             break
                         await page.wait_for_timeout(1000)
                     await page.wait_for_timeout(2000)
-                    # La vue « Saison » est paginée : cliquer « Suivant » jusqu'à ce qu'aucun nouveau match n'apparaisse.
-                    # The "Season" view is paginated: click "Suivant" until no new game shows up.
-                    nb_matchs = await page.locator("article[itemtype*='SportsEvent']").count()
-                    for _ in range(15):
-                        # Clic direct dans la page, sans défiler (le défilement fait disparaître les cartes).
-                        # Direct in-page click, no scrolling (scrolling makes the cards disappear).
-                        etat = await page.evaluate("""() => {
-                            const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Suivant');
-                            if (!b) return 'absent';
-                            if (b.disabled || b.getAttribute('aria-disabled') === 'true') return 'désactivé';
-                            b.click(); return 'ok'; }""")
-                        if etat != "ok":
-                            print(f"[SCHEDULE] Bouton « Suivant » {etat} : fin de la liste.")
-                            break
-                        await page.wait_for_timeout(2500)
-                        for _ in range(10):
-                            if await page.locator(".spdl-skeleton").count() == 0:
+                    # La vue « Saison » n'affiche les matchs qu'à l'écran et en ajoute en défilant :
+                    # défilement progressif, une capture à chaque étape (fusionnées plus tard).
+                    # The "Season" view only renders on-screen games and appends more while scrolling:
+                    # scroll step by step and keep a snapshot at each step (merged later).
+                    captures = [await page.content()]
+                    hauteur_prec, immobile = 0, 0
+                    for _ in range(40):
+                        await page.evaluate("window.scrollBy(0, 500)")
+                        await page.wait_for_timeout(1500)
+                        captures.append(await page.content())
+                        pos = await page.evaluate("[window.scrollY + window.innerHeight, document.body.scrollHeight]")
+                        if pos[0] >= pos[1] - 5:
+                            immobile = immobile + 1 if pos[1] == hauteur_prec else 0
+                            if immobile >= 2:
                                 break
-                            await page.wait_for_timeout(1000)
-                        nouveau = await page.locator("article[itemtype*='SportsEvent']").count()
-                        print(f"[SCHEDULE] « Suivant » : {nb_matchs} -> {nouveau} match(s)")
-                        if nouveau <= nb_matchs:
-                            break
-                        nb_matchs = nouveau
-                    print(f"[SCHEDULE] {nb_matchs} match(s) affiché(s).")
-                    # Capturer avant le défilement : il fait disparaître les cartes de match.
-                    # Capture before scrolling: scrolling makes the game cards disappear.
-                    html_content = await page.content()
-                    scraped_html[key] = html_content
-                    download_logos(BeautifulSoup(html_content, "html.parser"))
+                        hauteur_prec = pos[1]
+                    print(f"[SCHEDULE] {len(captures)} capture(s) de la vue « Saison ».")
+                    scraped_html["schedule"] = captures[0]
+                    scraped_html["schedule_captures"] = captures
+                    for cap in captures:
+                        download_logos(BeautifulSoup(cap, "html.parser"))
                     continue
 
                 await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
@@ -698,11 +689,23 @@ async def scrape_and_publish():
             roster_data["personnel"] = roster_texte["personnel"]
     schedule_data = parse_schedule_structured(scraped_html.get("schedule", ""))
     matchs = []
-    for vue in ("schedule", "schedule_7j"):
-        for m in parse_schedule_cards(scraped_html.get(vue, "")):
-            cle = (m.get("numero") or "", m.get("date_iso"), tuple(m.get("equipes", [])))
-            if not any((x.get("numero") or "", x.get("date_iso"), tuple(x.get("equipes", []))) == cle for x in matchs):
-                matchs.append(m)
+    sources = list(scraped_html.get("schedule_captures") or [scraped_html.get("schedule", "")]) + [scraped_html.get("schedule_7j", "")]
+    # Historique des matchs joués conservé d'un cycle à l'autre / played games kept across cycles
+    HISTO = "/data/matchs_joues.json"
+    try:
+        with open(HISTO, encoding="utf-8") as f:
+            matchs = [m for m in json.load(f) if m.get("joue")]
+    except Exception:
+        matchs = []
+    for html_vue in sources:
+        for m in parse_schedule_cards(html_vue):
+            cle = (m.get("date_iso"), tuple(m.get("equipes", [])))
+            matchs = [x for x in matchs if (x.get("date_iso"), tuple(x.get("equipes", []))) != cle] + [m]
+    try:
+        with open(HISTO, "w", encoding="utf-8") as f:
+            json.dump([m for m in matchs if m.get("joue")], f, ensure_ascii=False)
+    except Exception as e:
+        print(f"[SCHEDULE] Historique non enregistré : {e}")
     joues = sorted([m for m in matchs if m["joue"]], key=lambda m: m.get("date_iso", ""))
     a_venir = sorted([m for m in matchs if not m["joue"]], key=lambda m: m.get("date_iso", ""))
     last_match = joues[-1] if joues else None
