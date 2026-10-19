@@ -540,7 +540,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.4 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.5 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -636,7 +636,27 @@ async def scrape_and_publish():
                             break
                         await page.wait_for_timeout(1000)
                     await page.wait_for_timeout(2000)
+                    # La vue « Saison » est paginée : cliquer « Suivant » jusqu'à ce qu'aucun nouveau match n'apparaisse.
+                    # The "Season" view is paginated: click "Suivant" until no new game shows up.
                     nb_matchs = await page.locator("article[itemtype*='SportsEvent']").count()
+                    for _ in range(15):
+                        suivant = page.locator("button:has-text('Suivant')").first
+                        try:
+                            if not await suivant.is_visible() or not await suivant.is_enabled():
+                                break
+                            await suivant.click(timeout=5000)
+                        except Exception:
+                            break
+                        await page.wait_for_timeout(2500)
+                        for _ in range(10):
+                            if await page.locator(".spdl-skeleton").count() == 0:
+                                break
+                            await page.wait_for_timeout(1000)
+                        nouveau = await page.locator("article[itemtype*='SportsEvent']").count()
+                        print(f"[SCHEDULE] « Suivant » : {nb_matchs} -> {nouveau} match(s)")
+                        if nouveau <= nb_matchs:
+                            break
+                        nb_matchs = nouveau
                     print(f"[SCHEDULE] {nb_matchs} match(s) affiché(s).")
                     # Capturer avant le défilement : il fait disparaître les cartes de match.
                     # Capture before scrolling: scrolling makes the game cards disappear.
