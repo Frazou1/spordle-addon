@@ -540,7 +540,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.6 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.7 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -640,23 +640,15 @@ async def scrape_and_publish():
                     # The "Season" view is paginated: click "Suivant" until no new game shows up.
                     nb_matchs = await page.locator("article[itemtype*='SportsEvent']").count()
                     for _ in range(15):
-                        # Le bouton n'apparaît qu'en bas de la liste / the button only shows at the bottom of the list
-                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                        await page.wait_for_timeout(1500)
-                        suivant = page.locator("button:has-text('Suivant')")
-                        try:
-                            nb_btn = await suivant.count()
-                            if nb_btn == 0:
-                                print("[SCHEDULE] Bouton « Suivant » absent : fin de la liste.")
-                                break
-                            suivant = suivant.last
-                            await suivant.scroll_into_view_if_needed(timeout=5000)
-                            if not await suivant.is_enabled():
-                                print("[SCHEDULE] Bouton « Suivant » désactivé : fin de la liste.")
-                                break
-                            await suivant.click(timeout=5000)
-                        except Exception as e:
-                            print(f"[SCHEDULE] Clic « Suivant » impossible : {e}")
+                        # Clic direct dans la page, sans défiler (le défilement fait disparaître les cartes).
+                        # Direct in-page click, no scrolling (scrolling makes the cards disappear).
+                        etat = await page.evaluate("""() => {
+                            const b = [...document.querySelectorAll('button')].find(x => x.textContent.trim() === 'Suivant');
+                            if (!b) return 'absent';
+                            if (b.disabled || b.getAttribute('aria-disabled') === 'true') return 'désactivé';
+                            b.click(); return 'ok'; }""")
+                        if etat != "ok":
+                            print(f"[SCHEDULE] Bouton « Suivant » {etat} : fin de la liste.")
                             break
                         await page.wait_for_timeout(2500)
                         for _ in range(10):
@@ -737,8 +729,8 @@ async def scrape_and_publish():
     echecs = [k for k, v in ok.items() if not v]
     if echecs:
         print(f"[PUBLICATION] Pages en échec, capteurs conservés : {', '.join(echecs)}")
-    if ok["schedule"] and not joues and not saison_ok:
-        print("[PUBLICATION] Filtre « Saison » non appliqué : dernier match conservé.")
+    if ok["schedule"] and not joues:
+        print("[PUBLICATION] Aucun match joué lu : dernier match conservé.")
 
     print("\n[MQTT] Début de la publication sur le broker...")
 
@@ -785,7 +777,9 @@ async def scrape_and_publish():
         "json_attributes_topic": f"spordle/{TEAM_ID}/last_match/attributes",
         "icon": "mdi:scoreboard"
     })
-    if ok["schedule"] and (joues or saison_ok):
+    # Aucun match joué lu = page incomplète : on garde le dernier match déjà publié.
+    # No played game read = incomplete page: keep the last match already published.
+    if ok["schedule"] and joues:
         publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/state", last_state)
         publish_to_mqtt(f"spordle/{TEAM_ID}/last_match/attributes", {"match": last_match, "tous_les_matchs_joues": joues})
 
