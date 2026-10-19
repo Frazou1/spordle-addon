@@ -540,7 +540,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.5 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.7.6 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -640,12 +640,23 @@ async def scrape_and_publish():
                     # The "Season" view is paginated: click "Suivant" until no new game shows up.
                     nb_matchs = await page.locator("article[itemtype*='SportsEvent']").count()
                     for _ in range(15):
-                        suivant = page.locator("button:has-text('Suivant')").first
+                        # Le bouton n'apparaît qu'en bas de la liste / the button only shows at the bottom of the list
+                        await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                        await page.wait_for_timeout(1500)
+                        suivant = page.locator("button:has-text('Suivant')")
                         try:
-                            if not await suivant.is_visible() or not await suivant.is_enabled():
+                            nb_btn = await suivant.count()
+                            if nb_btn == 0:
+                                print("[SCHEDULE] Bouton « Suivant » absent : fin de la liste.")
+                                break
+                            suivant = suivant.last
+                            await suivant.scroll_into_view_if_needed(timeout=5000)
+                            if not await suivant.is_enabled():
+                                print("[SCHEDULE] Bouton « Suivant » désactivé : fin de la liste.")
                                 break
                             await suivant.click(timeout=5000)
-                        except Exception:
+                        except Exception as e:
+                            print(f"[SCHEDULE] Clic « Suivant » impossible : {e}")
                             break
                         await page.wait_for_timeout(2500)
                         for _ in range(10):
