@@ -10,9 +10,9 @@ map:
   - share:rw
   - config:rw
 options:
-  team_id: "000000"
-  team_name: "MON EQUIPE"
-  tracked_player: "Joueur"
+  team_id: ""
+  team_name: ""
+  tracked_player: ""
   update_interval_hours: 6
   mqtt_host: "core-mosquitto"
   mqtt_port: 1883

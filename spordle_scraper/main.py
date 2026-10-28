@@ -18,8 +18,8 @@ DERNIERS_MATCHS = []
 with open("/data/options.json", "r") as f:
     config = json.load(f)
 
-TEAM_ID = config.get("team_id", "000000")
-MY_TEAM_NAME = config.get("team_name", "MON EQUIPE").upper()
+TEAM_ID = config.get("team_id", "")
+MY_TEAM_NAME = config.get("team_name", "").upper()
 TRACKED_PLAYER = config.get("tracked_player", "").strip().lower()
 
 MQTT_HOST = config.get("mqtt_host", "core-mosquitto")
