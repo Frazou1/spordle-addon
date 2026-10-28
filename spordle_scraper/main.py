@@ -10,6 +10,10 @@ from zoneinfo import ZoneInfo
 from bs4 import BeautifulSoup
 import paho.mqtt.client as mqtt
 from playwright.async_api import async_playwright
+import rythme
+
+# Matchs du dernier cycle, pour le rythme adaptatif / last cycle's games, for the adaptive rhythm
+DERNIERS_MATCHS = []
 
 with open("/data/options.json", "r") as f:
     config = json.load(f)
@@ -540,7 +544,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.7.8 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.8.0 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -706,6 +710,7 @@ async def scrape_and_publish():
             json.dump([m for m in matchs if m.get("joue")], f, ensure_ascii=False)
     except Exception as e:
         print(f"[SCHEDULE] Historique non enregistré : {e}")
+    DERNIERS_MATCHS[:] = matchs
     joues = sorted([m for m in matchs if m["joue"]], key=lambda m: m.get("date_iso", ""))
     a_venir = sorted([m for m in matchs if not m["joue"]], key=lambda m: m.get("date_iso", ""))
     last_match = joues[-1] if joues else None
@@ -836,5 +841,9 @@ async def scrape_and_publish():
 if __name__ == "__main__":
     while True:
         asyncio.run(scrape_and_publish())
-        print(f"\n[ATTENTE] Prochaine mise à jour dans {INTERVAL / 3600} heures...")
-        time.sleep(INTERVAL)
+        # Rythme adaptatif les jours de match (rythme.py) / adaptive rhythm on game days
+        attente, raison = rythme.delai(
+            [(f"{m.get('iso')}|{'/'.join(m.get('equipes', []))}", rythme.lire_iso(m.get("iso")), bool(m.get("joue")))
+             for m in DERNIERS_MATCHS], INTERVAL)
+        print(f"\n[ATTENTE] {attente / 60:.0f} min ({raison})...")
+        time.sleep(attente)

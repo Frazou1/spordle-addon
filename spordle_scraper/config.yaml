@@ -1,6 +1,6 @@
 name: "Spordle Hockey Stats"
 description: "Récupère les statistiques, l'horaire et les logos Spordle pour Home Assistant."
-version: "1.7.8"
+version: "1.8.0"
 slug: "spordle_scraper"
 init: false
 arch:
