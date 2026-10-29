@@ -548,7 +548,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.8.1 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.8.2 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -702,7 +702,7 @@ async def scrape_and_publish():
     HISTO = "/data/matchs_joues.json"
     try:
         with open(HISTO, encoding="utf-8") as f:
-            matchs = [m for m in json.load(f) if m.get("joue")]
+            matchs = [m for m in json.load(f) if rythme.histo_valide(m)]
     except Exception:
         matchs = []
     for html_vue in sources:
@@ -711,7 +711,7 @@ async def scrape_and_publish():
             matchs = [x for x in matchs if (x.get("date_iso"), tuple(x.get("equipes", []))) != cle] + [m]
     try:
         with open(HISTO, "w", encoding="utf-8") as f:
-            json.dump([m for m in matchs if m.get("joue")], f, ensure_ascii=False)
+            json.dump([m for m in matchs if rythme.histo_valide(m)], f, ensure_ascii=False)
     except Exception as e:
         print(f"[SCHEDULE] Historique non enregistré : {e}")
     rythme.garder_debuts(matchs)
