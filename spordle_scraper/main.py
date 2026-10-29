@@ -177,7 +177,10 @@ _MOIS_ABBR = {
 
 
 def _parse_date_header(h4_text: str):
-    m = re.match(r'(\w+)\s+(\d{1,2})\s+(\w+)\s+(\d{4})', h4_text.strip(), re.I)
+    # « Aujourd'hui, jeudi 29 octobre 2026 » : le jour de semaine peut etre precede d'un mot
+    # "Today, Thursday ...": the weekday may follow a prefix
+    m = re.search(r'(lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+(\d{1,2})\s+(\w+)\s+(\d{4})',
+                  h4_text.strip(), re.I)
     if not m:
         return h4_text, ""
     jour, num, mois, annee = m.group(1).lower(), int(m.group(2)), m.group(3).lower(), int(m.group(4))
@@ -291,7 +294,8 @@ def parse_schedule_cards(html: str):
                         "logo_local": logo_local,
                     })
 
-            joue = bool(score)
+            # Joue seulement une fois FINAL (un match EN COURS affiche deja 0-0) / played only once FINAL
+            joue = bool(score) and status == "FINAL"
             match = {
                 "numero": num_match,
                 "date": date_fr,
@@ -544,7 +548,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.8.0 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.8.1 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -710,6 +714,7 @@ async def scrape_and_publish():
             json.dump([m for m in matchs if m.get("joue")], f, ensure_ascii=False)
     except Exception as e:
         print(f"[SCHEDULE] Historique non enregistré : {e}")
+    rythme.garder_debuts(matchs)
     DERNIERS_MATCHS[:] = matchs
     joues = sorted([m for m in matchs if m["joue"]], key=lambda m: m.get("date_iso", ""))
     a_venir = sorted([m for m in matchs if not m["joue"]], key=lambda m: m.get("date_iso", ""))
@@ -842,8 +847,6 @@ if __name__ == "__main__":
     while True:
         asyncio.run(scrape_and_publish())
         # Rythme adaptatif les jours de match (rythme.py) / adaptive rhythm on game days
-        attente, raison = rythme.delai(
-            [(f"{m.get('iso')}|{'/'.join(m.get('equipes', []))}", rythme.lire_iso(m.get("iso")), bool(m.get("joue")))
-             for m in DERNIERS_MATCHS], INTERVAL)
+        attente, raison = rythme.delai([rythme.entree(m) for m in DERNIERS_MATCHS], INTERVAL)
         print(f"\n[ATTENTE] {attente / 60:.0f} min ({raison})...")
         time.sleep(attente)
