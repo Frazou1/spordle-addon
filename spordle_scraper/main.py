@@ -14,6 +14,10 @@ import rythme
 
 # Matchs du dernier cycle, pour le rythme adaptatif / last cycle's games, for the adaptive rhythm
 DERNIERS_MATCHS = []
+# Pages revenues vides au dernier passage (capteurs conserves, nouvel essai plus tot)
+# Pages that came back empty on the last run (sensors kept, earlier retry)
+ECHECS = []
+REESSAI_ECHEC = 1800
 
 with open("/data/options.json", "r") as f:
     config = json.load(f)
@@ -548,7 +552,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.8.2 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.8.3 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -705,8 +709,11 @@ async def scrape_and_publish():
             matchs = [m for m in json.load(f) if rythme.histo_valide(m)]
     except Exception:
         matchs = []
+    nb_cartes = 0   # cartes lues a ce passage / cards read this run
     for html_vue in sources:
-        for m in parse_schedule_cards(html_vue):
+        cartes = parse_schedule_cards(html_vue)
+        nb_cartes += len(cartes)
+        for m in cartes:
             cle = (m.get("date_iso"), tuple(m.get("equipes", [])))
             matchs = [x for x in matchs if (x.get("date_iso"), tuple(x.get("equipes", []))) != cle] + [m]
     try:
@@ -739,7 +746,15 @@ async def scrape_and_publish():
     # Une page en échec (réseau, blocage) ne doit pas effacer les données déjà publiées (messages retenus).
     # A failed page (network, blocking) must not wipe data already published (retained messages).
     ok = {k: bool(scraped_html.get(k)) for k in urls_to_scrape}
+    # Page recue mais sans contenu (tableau ou cartes absents) = echec aussi : on garde les capteurs.
+    # Page received but without content (no table or cards) = failure too: keep the sensors.
+    for cle, lu in (("stats_hors_concours", player_stats_hc), ("stats_saison_reguliere", player_stats_sr),
+                    ("standings", standings_list), ("schedule", nb_cartes)):
+        if ok[cle] and not lu:
+            print(f"[PUBLICATION] Page '{cle}' recue sans contenu : traitee comme un echec.")
+            ok[cle] = False
     echecs = [k for k, v in ok.items() if not v]
+    ECHECS[:] = [k for k in echecs if k != "stats_hors_concours"]   # HC peut etre vide hors saison / HC may be empty off-season
     if echecs:
         print(f"[PUBLICATION] Pages en échec, capteurs conservés : {', '.join(echecs)}")
     if ok["schedule"] and not joues:
@@ -814,7 +829,7 @@ async def scrape_and_publish():
             "classement_ligue": ligue,
         })
 
-    if TRACKED_PLAYER and (ok["stats_hors_concours"] or ok["stats_saison_reguliere"]):
+    if TRACKED_PLAYER and ok["stats_saison_reguliere"]:
         player_slug = re.sub(r'[^a-zA-Z0-9]', '_', TRACKED_PLAYER)
         pts_hc = player_info_hc.get("PTS", "0") if player_info_hc else "0"
         pts_sr = player_info_sr.get("PTS", "0") if player_info_sr else "0"
@@ -848,5 +863,7 @@ if __name__ == "__main__":
         asyncio.run(scrape_and_publish())
         # Rythme adaptatif les jours de match (rythme.py) / adaptive rhythm on game days
         attente, raison = rythme.delai([rythme.entree(m) for m in DERNIERS_MATCHS], INTERVAL)
+        if ECHECS and attente > REESSAI_ECHEC:
+            attente, raison = REESSAI_ECHEC, "nouvel essai après page vide : " + ", ".join(ECHECS)
         print(f"\n[ATTENTE] {attente / 60:.0f} min ({raison})...")
         time.sleep(attente)
