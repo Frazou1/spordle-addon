@@ -552,7 +552,7 @@ def download_logos(soup: BeautifulSoup):
 
 async def scrape_and_publish():
     print(f"\n==================================================")
-    print(f"[START] Scraping Spordle v1.8.3 (Équipe: {MY_TEAM_NAME})")
+    print(f"[START] Scraping Spordle v1.8.4 (Équipe: {MY_TEAM_NAME})")
     print(f"==================================================")
     
     base_url = f"https://page.spordle.com/fr/lhqca/schedule-stats-standings/{LEAGUE_UUID}"
@@ -820,13 +820,24 @@ async def scrape_and_publish():
     })
     if ok["standings"]:
         publish_to_mqtt(f"spordle/{TEAM_ID}/standings/state", f"{my_team_info.get('#', 'N/A')}e rang" if my_team_info else "Saison en cours")
+        # Attributs limites a 16 Ko par HA (sinon pas enregistres dans l'historique) : on ne garde que les
+        # colonnes affichees et le logo local ; le classement complet ne sert que si la ligue n'a pas ete lue.
+        # HA caps attributes at 16 KB (otherwise not recorded): keep only displayed columns and the local
+        # logo; the full standings are only a fallback when the league page was not read.
+        def _court(lst):
+            out = []
+            for r in lst or []:
+                c = {k: r.get(k) for k in ("#", "Équipe", "MJ", "V", "D", "N", "PTS") if r.get(k) is not None}
+                c["logo_local"] = r.get("logo_local") or r.get("logo_url") or r.get("logo_remote") or ""
+                out.append(c)
+            return out
         publish_to_mqtt(f"spordle/{TEAM_ID}/standings/attributes", {
             "mon_equipe": my_team_info,
-            "classement_complet": standings_list,
-            "classement_division": division,
+            "classement_complet": [] if ligue else _court(standings_list),
+            "classement_division": _court(division),
             "rang_ligue": rang_ligue,
             "nb_equipes_ligue": nb_ligue,
-            "classement_ligue": ligue,
+            "classement_ligue": _court(ligue),
         })
 
     if TRACKED_PLAYER and ok["stats_saison_reguliere"]:
